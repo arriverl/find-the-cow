@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>找牛游戏复现</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>找牛游戏</h1>
+        <div class="rules">
+            <span>每种颜色1头小牛</span>
+            <span>每行、每列均有且仅有1头小牛</span>
+            <span>小牛不能相邻</span>
+        </div>
+        <div class="top-bar">
+            <span id="level">第 1 关 · 5×5</span>
+            <span id="lives">❤️❤️❤️</span>
+        </div>
+        <div id="game-board" class="board"></div>
+        <div class="controls">
+            <button onclick="initGame()">重新开始</button>
+            <p id="status">剩余小牛: 5 · 单击×/取消×，双击标牛</p>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
