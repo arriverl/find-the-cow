@@ -3,11 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>找牛游戏复现</title>
+    <title>找牛游戏</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
+    <!-- 首页：选择模式 -->
+    <div id="home" class="container">
+        <h1>找牛游戏</h1>
+        <p id="coins" class="coins-display">金币: 99</p>
+        <div class="rules">
+            <span>每种颜色1头小牛</span>
+            <span>每行、每列均有且仅有1头小牛</span>
+            <span>小牛不能相邻</span>
+        </div>
+        <p class="home-desc">过关模式三条命、不限时，命用完可用金币买命；无限模式无限命、仅限时，初始300秒，找对+5秒、找错-10秒，时间到可用金币换30秒。单击×/取消×，双击标牛。</p>
+        <div class="mode-buttons">
+            <button class="mode-btn" data-mode="normal">过关模式</button>
+            <button class="mode-btn" data-mode="infinite">无限模式</button>
+        </div>
+    </div>
+
+    <!-- 游戏界面 -->
+    <div id="game-screen" class="container" style="display: none;">
         <h1>找牛游戏</h1>
         <div class="rules">
             <span>每种颜色1头小牛</span>
@@ -16,11 +33,13 @@
         </div>
         <div class="top-bar">
             <span id="level">第 1 关 · 5×5</span>
+            <span id="timer">剩余时间: 6:40</span>
             <span id="lives">❤️❤️❤️</span>
         </div>
         <div id="game-board" class="board"></div>
         <div class="controls">
-            <button onclick="initGame()">重新开始</button>
+            <button onclick="goHome()">返回首页</button>
+            <button onclick="restartRound()">重新开始</button>
             <p id="status">剩余小牛: 5 · 单击×/取消×，双击标牛</p>
         </div>
     </div>

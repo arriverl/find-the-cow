@@ -49,7 +49,9 @@ h1 {
     align-items: center;
     margin-bottom: 12px;
     padding: 0 4px;
-    font-size: 1rem;
+    font-size: 0.95rem;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 #level {
@@ -57,9 +59,63 @@ h1 {
     color: rgba(255,255,255,0.95);
 }
 
+#timer {
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+}
+#timer.timer-low {
+    color: #ff6b6b;
+    animation: pulse 1s ease infinite;
+}
+@keyframes pulse {
+    50% { opacity: 0.85; }
+}
+
 #lives {
     font-size: 1.2rem;
     letter-spacing: 2px;
+}
+
+/* 首页 */
+.coins-display {
+    margin: 0 0 12px 0;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #ffd700;
+}
+
+.home-desc {
+    margin: 12px 0 24px;
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.8);
+}
+.mode-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 240px;
+    margin: 0 auto;
+}
+.mode-btn {
+    padding: 16px 24px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: filter 0.15s, transform 0.1s;
+}
+.mode-btn:hover {
+    filter: brightness(1.1);
+    transform: scale(1.02);
+}
+.mode-btn:first-child {
+    background: linear-gradient(180deg, #5a9fd4, #4a8bc2);
+    color: #fff;
+}
+.mode-btn:last-child {
+    background: linear-gradient(180deg, #7b68b8, #6a5a9e);
+    color: #fff;
 }
 
 .board {
@@ -71,6 +127,15 @@ h1 {
     width: fit-content;
     border-radius: 6px;
     padding: var(--gap);
+}
+
+.generating-msg {
+    margin: 0;
+    padding: 48px 32px;
+    min-width: 160px;
+    text-align: center;
+    color: rgba(255,255,255,0.85);
+    font-size: 1rem;
 }
 
 .cell {

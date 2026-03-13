@@ -3,61 +3,166 @@ function getRandomGridSize() {
     return 4 + Math.floor(Math.random() * 10); // 4..13
 }
 
-let gridSize = 5;           // 当前 n×n 的 n
-let currentLevel = 1;      // 当前关卡
-let lives = 3;              // 当前关剩余命数
-let boardData = [];         // 存储单元格信息
-let gameOver = false;       // 是否已游戏结束（命用尽）
-const DOUBLE_CLICK_DELAY = 280;  // 毫秒内第二次点击视为双击
-const LONG_PRESS_MS = 400;       // 长按超过此时间进入「连续标×」模式
-let clickPending = null;   // { r, c, timeoutId } 用于区分单击/双击
-let uiUpdateScheduled = false;   // 用于合并 updateUI/checkWin，减少卡顿
-let longPressTimer = null;      // 长按定时器
-let longPressDrawing = false;   // 是否处于长按拖拽标×
-let longPressTouchId = null;    // 当前长按的 touch identifier
-let longPressMouse = false;     // 是否鼠标长按
+const INFINITE_INITIAL_TIME = 300;  // 无限模式初始 300 秒
+const COINS_STORAGE_KEY = 'findTheCow_coins';
+const INITIAL_COINS = 99;
 
-function initGame() {
-    gameOver = false;
-    currentLevel = 1;
-    lives = 3;
-    startLevel(currentLevel);
+let gridSize = 5;               // 当前 n×n 的 n
+let currentLevel = 1;           // 当前关卡（过关模式）或显示用
+let roundCount = 0;             // 无限模式本轮已过关数
+let totalCowsCaught = 0;       // 无限模式累计抓到的牛数
+let lives = 3;                  // 当前关剩余命数
+let boardData = [];             // 存储单元格信息
+let gameOver = false;           // 是否已游戏结束（命用尽或时间到）
+let gameMode = null;            // 'normal' | 'infinite'
+let timeLeft = INFINITE_INITIAL_TIME;  // 剩余秒数（仅无限模式）
+let timerInterval = null;       // 倒计时 setInterval
+const DOUBLE_CLICK_DELAY = 280;
+const LONG_PRESS_MS = 400;
+let clickPending = null;
+let uiUpdateScheduled = false;
+let longPressTimer = null;
+let longPressDrawing = false;
+let longPressTouchId = null;
+let longPressMouse = false;
+
+function getCoins() {
+    const v = parseInt(localStorage.getItem(COINS_STORAGE_KEY), 10);
+    return isNaN(v) || v < 0 ? INITIAL_COINS : v;
+}
+function setCoins(n) {
+    localStorage.setItem(COINS_STORAGE_KEY, Math.max(0, n));
+}
+function updateCoinsDisplay() {
+    const el = document.getElementById('coins');
+    if (el) el.textContent = '金币: ' + getCoins();
 }
 
-/** 开始指定关卡（或从第一关重新开始） */
-function startLevel(level) {
-    currentLevel = level;
-    gridSize = getRandomGridSize();
-    lives = 3;
-    gameOver = false;
+function showHome() {
+    document.getElementById('home').style.display = 'block';
+    document.getElementById('game-screen').style.display = 'none';
+    updateCoinsDisplay();
+}
 
+function showGameScreen() {
+    document.getElementById('home').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'block';
+}
+
+/** 从首页选择模式后开始游戏 */
+function startGame(mode) {
+    gameMode = mode;
+    gameOver = false;
+    currentLevel = 1;
+    roundCount = 0;
+    totalCowsCaught = 0;
+    lives = 3;
+    showGameScreen();
+    startLevel(1);
+}
+
+/** 返回首页 */
+function goHome() {
+    stopTimer();
+    gameMode = null;
+    showHome();
+}
+
+/** 当前轮重新开始（保持模式） */
+function restartRound() {
+    if (!gameMode) return;
+    gameOver = false;
+    currentLevel = gameMode === 'normal' ? 1 : currentLevel;
+    if (gameMode === 'infinite') {
+        roundCount = 0;
+        totalCowsCaught = 0;
+    }
+    lives = 3;
+    startLevel(gameMode === 'normal' ? 1 : 1);
+}
+
+function stopTimer() {
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+}
+
+function startTimer() {
+    stopTimer();
+    timeLeft = INFINITE_INITIAL_TIME;
+    updateTimerDisplay();
+    timerInterval = setInterval(tickTimer, 1000);
+}
+
+function tickTimer() {
+    timeLeft--;
+    updateTimerDisplay();
+    if (timeLeft <= 0) {
+        stopTimer();
+        handleTimeUp();
+    }
+}
+
+function updateTimerDisplay() {
+    const el = document.getElementById('timer');
+    if (!el) return;
+    const m = Math.floor(timeLeft / 60);
+    const s = timeLeft % 60;
+    el.textContent = `剩余时间: ${m}:${s.toString().padStart(2, '0')}`;
+    if (timeLeft <= 30) el.classList.add('timer-low');
+    else el.classList.remove('timer-low');
+}
+
+function handleTimeUp() {
+    const statusEl = document.getElementById('status');
+    // 无限模式：询问是否用金币换 30 秒
+    if (gameMode === 'infinite' && getCoins() >= 1 && confirm('是否用金币换30秒？')) {
+        setCoins(getCoins() - 1);
+        timeLeft = 30;
+        startTimer();
+        statusEl.classList.remove('lose');
+        statusEl.textContent = '已用 1 金币换取 30 秒，继续游戏！';
+        scheduleUIUpdate();
+        return;
+    }
+    gameOver = true;
+    statusEl.classList.add('lose');
+    if (gameMode === 'normal') {
+        statusEl.textContent = '时间到！本关未完成。可重新开始或返回首页。';
+    } else {
+        statusEl.textContent = `时间到！本轮通过 ${roundCount} 关，累计抓到 ${totalCowsCaught} 头牛。可再玩一局或返回首页。`;
+    }
+}
+
+function initGame() {
+    if (gameMode) restartRound();
+    else startGame('normal');
+}
+
+/** 尝试生成一批地图；若本批内得到唯一解且解等于种子则返回 { seeds, regions }，否则 null */
+function tryGenerateOne() {
+    const n = gridSize;
+    const batch = 150;
+    for (let attempt = 0; attempt < batch; attempt++) {
+        const seeds = generateCowSeeds();
+        if (!seeds || seeds.length !== n) continue;
+        const regions = generateRegions(seeds);
+        if (countSolutions(regions) !== 1) continue;
+        if (!uniqueSolutionEqualsSeeds(regions, seeds)) continue;
+        return { seeds, regions };
+    }
+    return null;
+}
+
+/** 渲染已生成好的棋盘（仅在有 seeds、regions 时调用） */
+function renderBoard(seeds, regions) {
     const boardEl = document.getElementById('game-board');
     const statusEl = document.getElementById('status');
     statusEl.classList.remove('win', 'lose');
 
     boardEl.style.gridTemplateColumns = `repeat(${gridSize}, 1fr)`;
     boardEl.innerHTML = '';
-    boardData = Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
-
-    // 生成唯一解地图：若解不唯一则丢弃重生成
-    const UNIQUE_MAX_ATTEMPTS = 100;
-    let seeds = null;
-    let regions = null;
-    let hasUnique = false;
-    for (let attempt = 0; attempt < UNIQUE_MAX_ATTEMPTS; attempt++) {
-        seeds = generateCowSeeds();
-        if (!seeds || seeds.length !== gridSize) continue;
-        regions = generateRegions(seeds);
-        if (countSolutions(regions) === 1) {
-            hasUnique = true;
-            break;
-        }
-    }
-    if (!hasUnique || !seeds || !regions) {
-        statusEl.textContent = '生成唯一解地图失败，请点击重新开始';
-        return;
-    }
-
     for (let r = 0; r < gridSize; r++) {
         for (let c = 0; c < gridSize; c++) {
             const cell = document.createElement('div');
@@ -77,11 +182,42 @@ function startLevel(level) {
         }
     }
 
-    // 长按拖拽标×：触摸与鼠标
+    boardEl.removeEventListener('touchstart', handlePointerDown);
+    boardEl.removeEventListener('mousedown', handlePointerDown);
     boardEl.addEventListener('touchstart', handlePointerDown, { passive: true });
     boardEl.addEventListener('mousedown', handlePointerDown);
 
+    if (gameMode === 'infinite') startTimer();
+    else stopTimer();
     updateUI();
+}
+
+/** 反复生成直到得到唯一解地图，再渲染；不阻塞 UI（用 setTimeout 分批） */
+function startLevel(level) {
+    currentLevel = level;
+    gridSize = getRandomGridSize();
+    lives = 3;
+    gameOver = false;
+
+    const boardEl = document.getElementById('game-board');
+    const statusEl = document.getElementById('status');
+    statusEl.classList.remove('win', 'lose');
+
+    boardEl.style.gridTemplateColumns = '1fr';
+    boardEl.innerHTML = '<p class="generating-msg">生成地图中…</p>';
+    boardData = Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
+
+    function tryBatch() {
+        if (!gameMode) return;
+        const result = tryGenerateOne();
+        if (result) {
+            renderBoard(result.seeds, result.regions);
+            return;
+        }
+        setTimeout(tryBatch, 0);
+    }
+
+    setTimeout(tryBatch, 0);
 }
 
 function generateCowSeeds() {
@@ -256,15 +392,27 @@ document.addEventListener('touchend', handlePointerUp, { capture: true });
 document.addEventListener('touchcancel', handlePointerUp, { capture: true });
 document.addEventListener('mouseup', handlePointerUp);
 
-/** 统计当前区域图有多少组合法解（每区选一格，每行每列各一，8 邻不相邻） */
-function countSolutions(regions) {
+/** 收集区域格子：regionCells[id] = 该区域所有 (r,c)，id 严格 0..n-1 */
+function buildRegionCells(regions) {
     const n = regions.length;
     const regionCells = Array.from({ length: n }, () => []);
     for (let r = 0; r < n; r++) {
         for (let c = 0; c < n; c++) {
             const id = regions[r][c];
-            if (id >= 0 && id < n) regionCells[id].push({ r, c });
+            if (typeof id === 'number' && id >= 0 && id < n) {
+                regionCells[id].push({ r, c });
+            }
         }
+    }
+    return regionCells;
+}
+
+/** 统计合法解数量（每区选一格，每行每列各一，8 邻不相邻）；≥2 时提前返回 2 */
+function countSolutions(regions) {
+    const n = regions.length;
+    const regionCells = buildRegionCells(regions);
+    for (let i = 0; i < n; i++) {
+        if (regionCells[i].length === 0) return 0;
     }
 
     const usedRow = new Set();
@@ -277,7 +425,7 @@ function countSolutions(regions) {
     }
 
     function backtrack(regionIdx) {
-        if (count > 1) return;
+        if (count >= 2) return;
         if (regionIdx === n) {
             count++;
             return;
@@ -304,6 +452,64 @@ function countSolutions(regions) {
 
     backtrack(0);
     return count;
+}
+
+/** 当解唯一时，返回唯一解（n 个 {r,c}）；否则返回 null。用于校验是否等于种子。 */
+function getUniqueSolution(regions) {
+    const n = regions.length;
+    const regionCells = buildRegionCells(regions);
+    for (let i = 0; i < n; i++) {
+        if (regionCells[i].length === 0) return null;
+    }
+
+    const usedRow = new Set();
+    const usedCol = new Set();
+    const chosen = [];
+    let found = null;
+
+    function adjacent(a, b) {
+        return Math.abs(a.r - b.r) <= 1 && Math.abs(a.c - b.c) <= 1;
+    }
+
+    function backtrack(regionIdx) {
+        if (found !== null) return;
+        if (regionIdx === n) {
+            found = chosen.map(c => ({ r: c.r, c: c.c }));
+            return;
+        }
+        for (const cell of regionCells[regionIdx]) {
+            if (usedRow.has(cell.r) || usedCol.has(cell.c)) continue;
+            let ok = true;
+            for (let i = 0; i < chosen.length; i++) {
+                if (adjacent(cell, chosen[i])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok) continue;
+            usedRow.add(cell.r);
+            usedCol.add(cell.c);
+            chosen.push(cell);
+            backtrack(regionIdx + 1);
+            chosen.pop();
+            usedCol.delete(cell.c);
+            usedRow.delete(cell.r);
+        }
+    }
+
+    backtrack(0);
+    return found;
+}
+
+/** 判断唯一解是否就是种子（同一组格子） */
+function uniqueSolutionEqualsSeeds(regions, seeds) {
+    const sol = getUniqueSolution(regions);
+    if (!sol || sol.length !== seeds.length) return false;
+    const set = new Set(seeds.map(s => s.r * 100 + s.c));
+    for (const c of sol) {
+        if (!set.has(c.r * 100 + c.c)) return false;
+    }
+    return true;
 }
 
 /** 单击：空白↔×；连续双击：标为牛（标错扣命） */
@@ -368,6 +574,26 @@ function applyMarkAsCow(cell, el) {
     el.classList.add('cow');
 
     if (!cell.correctCow) {
+        // 无限模式：无命数限制，只扣 10 秒
+        if (gameMode === 'infinite') {
+            timeLeft = Math.max(0, timeLeft - 10);
+            updateTimerDisplay();
+            el.classList.add('error');
+            setTimeout(() => {
+                cell.isCow = false;
+                cell.isMark = true;
+                el.classList.remove('cow', 'error');
+                el.classList.add('mark');
+                scheduleUIUpdate();
+            }, 400);
+            scheduleUIUpdate();
+            if (timeLeft <= 0) {
+                stopTimer();
+                handleTimeUp();
+            }
+            return;
+        }
+        // 过关模式：扣命，命尽可金币买命
         lives--;
         el.classList.add('error');
         setTimeout(() => {
@@ -379,14 +605,27 @@ function applyMarkAsCow(cell, el) {
         }, 400);
         scheduleUIUpdate();
         if (lives <= 0) {
-            gameOver = true;
             const statusEl = document.getElementById('status');
-            statusEl.textContent = '游戏结束！命已用尽。点击「重新开始」从第一关再玩。';
+            if (getCoins() >= 1 && confirm('是否用一个金币买一条命？')) {
+                setCoins(getCoins() - 1);
+                lives = 1;
+                statusEl.classList.remove('lose');
+                statusEl.textContent = '已用 1 金币购买一条命，继续游戏！';
+                scheduleUIUpdate();
+                return;
+            }
+            gameOver = true;
+            statusEl.textContent = '游戏结束！命已用尽。' + (getCoins() < 1 ? '（金币不足）' : '') + '点击「重新开始」或返回首页。';
             statusEl.classList.add('lose');
         }
         return;
     }
 
+    // 无限模式：找对一头牛加 5 秒
+    if (gameMode === 'infinite') {
+        timeLeft += 5;
+        updateTimerDisplay();
+    }
     document.querySelectorAll('.cell.error').forEach(n => n.classList.remove('error'));
     scheduleUIUpdate();
 }
@@ -396,8 +635,35 @@ function updateUI() {
     const levelEl = document.getElementById('level');
     const livesEl = document.getElementById('lives');
 
-    if (levelEl) levelEl.textContent = `第 ${currentLevel} 关 · ${gridSize}×${gridSize}`;
-    if (livesEl) livesEl.textContent = '❤️'.repeat(lives) + '♡'.repeat(3 - lives);
+    if (levelEl) {
+        if (gameMode === 'infinite') {
+            levelEl.textContent = `第 ${roundCount + 1} 轮 · ${gridSize}×${gridSize} · 累计 ${totalCowsCaught} 头牛`;
+        } else {
+            levelEl.textContent = `第 ${currentLevel} 关 · ${gridSize}×${gridSize}`;
+        }
+    }
+    // 过关模式显示命数，无限模式无命数限制不显示
+    if (livesEl) {
+        if (gameMode === 'infinite') {
+            livesEl.style.display = 'none';
+        } else {
+            livesEl.style.display = '';
+            livesEl.textContent = '❤️'.repeat(lives) + '♡'.repeat(3 - lives);
+        }
+    }
+
+    // 过关模式不显示计时，无限模式显示剩余时间
+    const timerEl = document.getElementById('timer');
+    if (timerEl) {
+        if (gameMode === 'infinite') {
+            timerEl.style.display = '';
+            timerEl.textContent = `剩余时间: ${Math.floor(timeLeft / 60)}:${(timeLeft % 60).toString().padStart(2, '0')}`;
+            if (timeLeft <= 30) timerEl.classList.add('timer-low');
+            else timerEl.classList.remove('timer-low');
+        } else {
+            timerEl.style.display = 'none';
+        }
+    }
 
     if (gameOver) return;
 
@@ -424,18 +690,42 @@ function checkWin() {
     const correctCows = countCorrectCows();
     if (correctCows !== gridSize) return;
 
+    stopTimer();
     const statusEl = document.getElementById('status');
-    statusEl.textContent = `🎉 第 ${currentLevel} 关通过！即将进入下一关…`;
+    if (gameMode === 'infinite') {
+        totalCowsCaught += gridSize;
+        roundCount++;
+        statusEl.textContent = `🎉 通过！本轮已过 ${roundCount} 关，累计 ${totalCowsCaught} 头牛，即将下一轮…`;
+    } else {
+        statusEl.textContent = `🎉 第 ${currentLevel} 关通过！即将进入下一关…`;
+    }
     statusEl.classList.add('win');
 
     setTimeout(() => {
-        startLevel(currentLevel + 1);
+        if (gameMode === 'infinite') {
+            startLevel(1); // 新的一轮，随机 n
+        } else {
+            startLevel(currentLevel + 1);
+        }
     }, 1200);
 }
 
-// 页面加载时从第一关开始
+// 页面加载：显示首页，绑定模式按钮
+function init() {
+    if (localStorage.getItem(COINS_STORAGE_KEY) === null) {
+        localStorage.setItem(COINS_STORAGE_KEY, String(INITIAL_COINS));
+    }
+    updateCoinsDisplay();
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.getAttribute('data-mode');
+            if (mode === 'normal' || mode === 'infinite') startGame(mode);
+        });
+    });
+}
+
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initGame);
+    document.addEventListener('DOMContentLoaded', init);
 } else {
-    initGame();
+    init();
 }
