@@ -140,11 +140,14 @@ function initGame() {
     else startGame('normal');
 }
 
-/** 尝试生成一批地图；若本批内得到唯一解且解等于种子则返回 { seeds, regions }，否则 null */
-function tryGenerateOne() {
+/** 每批尝试次数：较小以便尽快让出主线程，避免卡在「生成地图中」 */
+const GENERATE_BATCH_SIZE = 12;
+
+/** 尝试一批地图；若本批内得到唯一解且解等于种子则返回 { seeds, regions }，否则 null */
+function tryGenerateOne(maxAttempts) {
     const n = gridSize;
-    const batch = 150;
-    for (let attempt = 0; attempt < batch; attempt++) {
+    const limit = maxAttempts ?? GENERATE_BATCH_SIZE;
+    for (let attempt = 0; attempt < limit; attempt++) {
         const seeds = generateCowSeeds();
         if (!seeds || seeds.length !== n) continue;
         const regions = generateRegions(seeds);
@@ -187,12 +190,19 @@ function renderBoard(seeds, regions) {
     boardEl.addEventListener('touchstart', handlePointerDown, { passive: true });
     boardEl.addEventListener('mousedown', handlePointerDown);
 
-    if (gameMode === 'infinite') startTimer();
-    else stopTimer();
+    // 无限模式：下一轮接着上一轮剩余时间，不重置为 300；仅当时间已用完时才设为 300
+    if (gameMode === 'infinite') {
+        stopTimer();
+        if (timeLeft <= 0) timeLeft = INFINITE_INITIAL_TIME;
+        updateTimerDisplay();
+        timerInterval = setInterval(tickTimer, 1000);
+    } else {
+        stopTimer();
+    }
     updateUI();
 }
 
-/** 反复生成直到得到唯一解地图，再渲染；不阻塞 UI（用 setTimeout 分批） */
+/** 反复生成直到得到唯一解地图，再渲染；每批少量尝试后让出主线程，避免卡死 */
 function startLevel(level) {
     currentLevel = level;
     gridSize = getRandomGridSize();
@@ -204,20 +214,30 @@ function startLevel(level) {
     statusEl.classList.remove('win', 'lose');
 
     boardEl.style.gridTemplateColumns = '1fr';
-    boardEl.innerHTML = '<p class="generating-msg">生成地图中…</p>';
+    const msgEl = document.createElement('p');
+    msgEl.className = 'generating-msg';
+    msgEl.textContent = '生成地图中…';
+    boardEl.innerHTML = '';
+    boardEl.appendChild(msgEl);
     boardData = Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
+
+    let totalTries = 0;
 
     function tryBatch() {
         if (!gameMode) return;
-        const result = tryGenerateOne();
+        const result = tryGenerateOne(GENERATE_BATCH_SIZE);
+        totalTries += GENERATE_BATCH_SIZE;
         if (result) {
             renderBoard(result.seeds, result.regions);
             return;
         }
-        setTimeout(tryBatch, 0);
+        if (msgEl.parentNode) {
+            msgEl.textContent = '生成地图中… (已尝试 ' + totalTries + ' 次)';
+        }
+        setTimeout(tryBatch, 20);
     }
 
-    setTimeout(tryBatch, 0);
+    setTimeout(tryBatch, 20);
 }
 
 function generateCowSeeds() {
