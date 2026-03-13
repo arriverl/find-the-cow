@@ -1,6 +1,6 @@
-// 关卡对应 n：第 1 关 5×5，第 2 关 6×6，…，最大 12×12
-function getNForLevel(level) {
-    return Math.min(4 + level, 12);
+/** 每关在 4～13 之间随机一个 n，作为本关的 n×n 格子大小 */
+function getRandomGridSize() {
+    return 4 + Math.floor(Math.random() * 10); // 4..13
 }
 
 let gridSize = 5;           // 当前 n×n 的 n
@@ -9,7 +9,13 @@ let lives = 3;              // 当前关剩余命数
 let boardData = [];         // 存储单元格信息
 let gameOver = false;       // 是否已游戏结束（命用尽）
 const DOUBLE_CLICK_DELAY = 280;  // 毫秒内第二次点击视为双击
+const LONG_PRESS_MS = 400;       // 长按超过此时间进入「连续标×」模式
 let clickPending = null;   // { r, c, timeoutId } 用于区分单击/双击
+let uiUpdateScheduled = false;   // 用于合并 updateUI/checkWin，减少卡顿
+let longPressTimer = null;      // 长按定时器
+let longPressDrawing = false;   // 是否处于长按拖拽标×
+let longPressTouchId = null;    // 当前长按的 touch identifier
+let longPressMouse = false;     // 是否鼠标长按
 
 function initGame() {
     gameOver = false;
@@ -21,7 +27,7 @@ function initGame() {
 /** 开始指定关卡（或从第一关重新开始） */
 function startLevel(level) {
     currentLevel = level;
-    gridSize = getNForLevel(level);
+    gridSize = getRandomGridSize();
     lives = 3;
     gameOver = false;
 
@@ -70,6 +76,10 @@ function startLevel(level) {
             };
         }
     }
+
+    // 长按拖拽标×：触摸与鼠标
+    boardEl.addEventListener('touchstart', handlePointerDown, { passive: true });
+    boardEl.addEventListener('mousedown', handlePointerDown);
 
     updateUI();
 }
@@ -130,6 +140,121 @@ function generateRegions(seeds) {
     }
     return grid;
 }
+
+/** 合并到下一帧执行，减少快速连续点击时的卡顿 */
+function scheduleUIUpdate() {
+    if (uiUpdateScheduled) return;
+    uiUpdateScheduled = true;
+    requestAnimationFrame(() => {
+        updateUI();
+        checkWin();
+        uiUpdateScheduled = false;
+    });
+}
+
+/** 仅将格子设为 ×（用于长按拖拽），不取消牛、不切换空白 */
+function setCellMarkOnly(r, c) {
+    if (r < 0 || r >= gridSize || c < 0 || c >= gridSize) return;
+    const cell = boardData[r][c];
+    const el = cell.el;
+    if (cell.isCow) return; // 已是牛不改为×
+    if (cell.isMark) return; // 已是×不重复操作
+    cell.isMark = true;
+    el.classList.add('mark');
+    if (window.navigator.vibrate) window.navigator.vibrate(30);
+}
+
+/** 长按开始：触摸 */
+function handlePointerDown(e) {
+    if (gameOver) return;
+    const isTouch = e.type === 'touchstart';
+    const target = e.target;
+    if (!target.classList || !target.classList.contains('cell')) return;
+    const r = parseInt(target.dataset.r, 10);
+    const c = parseInt(target.dataset.c, 10);
+
+    const touchId = isTouch ? e.changedTouches[0].identifier : null;
+
+    const startLongPressDraw = () => {
+        longPressDrawing = true;
+        if (clickPending && clickPending.r === r && clickPending.c === c) {
+            clearTimeout(clickPending.timeoutId);
+            clickPending = null;
+        }
+        setCellMarkOnly(r, c);
+        scheduleUIUpdate();
+
+        const onMove = (e2) => {
+            if (!longPressDrawing) return;
+            let x, y;
+            if (e2.type.startsWith('touch')) {
+                const t = Array.from(e2.touches).find(touch => touch.identifier === longPressTouchId)
+                    || (e2.changedTouches && e2.changedTouches[0]);
+                if (!t) return;
+                x = t.clientX;
+                y = t.clientY;
+                e2.preventDefault();
+            } else {
+                x = e2.clientX;
+                y = e2.clientY;
+            }
+            const el = document.elementFromPoint(x, y);
+            if (el && el.dataset && el.dataset.r !== undefined) {
+                const nr = parseInt(el.dataset.r, 10);
+                const nc = parseInt(el.dataset.c, 10);
+                setCellMarkOnly(nr, nc);
+            }
+        };
+
+        const onEnd = (e2) => {
+            longPressDrawing = false;
+            longPressTouchId = null;
+            longPressMouse = false;
+            document.removeEventListener('touchmove', onMove, { capture: true });
+            document.removeEventListener('touchend', onEnd, { capture: true });
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onEnd);
+            if (e2.type.startsWith('touch')) e2.preventDefault(); // 阻止合成 click
+            scheduleUIUpdate();
+        };
+
+        if (isTouch) {
+            longPressTouchId = touchId;
+            document.addEventListener('touchmove', onMove, { passive: false, capture: true });
+            document.addEventListener('touchend', onEnd, { capture: true });
+        } else {
+            longPressMouse = true;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+        }
+    };
+
+    if (isTouch) {
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            startLongPressDraw();
+        }, LONG_PRESS_MS);
+    } else {
+        if (e.button !== 0) return;
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            startLongPressDraw();
+        }, LONG_PRESS_MS);
+    }
+}
+
+/** 触摸结束 / 鼠标松开时若未进入长按则清除定时器，并允许正常 click */
+function handlePointerUp(e) {
+    if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    }
+}
+
+// 在 document 上监听，确保手指/鼠标在别处松开也能清除定时器
+document.addEventListener('touchend', handlePointerUp, { capture: true });
+document.addEventListener('touchcancel', handlePointerUp, { capture: true });
+document.addEventListener('mouseup', handlePointerUp);
 
 /** 统计当前区域图有多少组合法解（每区选一格，每行每列各一，8 邻不相邻） */
 function countSolutions(regions) {
@@ -223,8 +348,7 @@ function handleCellClick(e) {
                 el.classList.add('mark');
             }
             document.querySelectorAll('.cell.error').forEach(n => n.classList.remove('error'));
-            updateUI();
-            checkWin();
+            scheduleUIUpdate();
         }, DOUBLE_CLICK_DELAY)
     };
 }
@@ -234,8 +358,7 @@ function applyMarkAsCow(cell, el) {
     if (cell.isCow) {
         cell.isCow = false;
         el.classList.remove('cow');
-        updateUI();
-        checkWin();
+        scheduleUIUpdate();
         return;
     }
 
@@ -252,9 +375,9 @@ function applyMarkAsCow(cell, el) {
             cell.isMark = true;
             el.classList.remove('cow', 'error');
             el.classList.add('mark');
-            updateUI();
+            scheduleUIUpdate();
         }, 400);
-        updateUI();
+        scheduleUIUpdate();
         if (lives <= 0) {
             gameOver = true;
             const statusEl = document.getElementById('status');
@@ -265,8 +388,7 @@ function applyMarkAsCow(cell, el) {
     }
 
     document.querySelectorAll('.cell.error').forEach(n => n.classList.remove('error'));
-    updateUI();
-    checkWin();
+    scheduleUIUpdate();
 }
 
 function updateUI() {
