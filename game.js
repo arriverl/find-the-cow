@@ -11,6 +11,7 @@ let gridSize = 5;               // 当前 n×n 的 n
 let currentLevel = 1;           // 当前关卡（过关模式）或显示用
 let roundCount = 0;             // 无限模式本轮已过关数
 let totalCowsCaught = 0;       // 无限模式累计抓到的牛数
+let lastCowsMilestone = 0;     // 无限模式：上次弹情话的累计值（每 +50 弹一次）
 let lives = 3;                  // 当前关剩余命数
 let boardData = [];             // 存储单元格信息
 let gameOver = false;           // 是否已游戏结束（命用尽或时间到）
@@ -56,6 +57,7 @@ function startGame(mode) {
     currentLevel = 1;
     roundCount = 0;
     totalCowsCaught = 0;
+    lastCowsMilestone = 0;
     lives = 3;
     showGameScreen();
     startLevel(1);
@@ -76,6 +78,7 @@ function restartRound() {
     if (gameMode === 'infinite') {
         roundCount = 0;
         totalCowsCaught = 0;
+        lastCowsMilestone = 0;
     }
     lives = 3;
     startLevel(gameMode === 'normal' ? 1 : 1);
@@ -741,6 +744,30 @@ function countCorrectCows() {
     return n;
 }
 
+/** 无限模式每累计 +50 头牛弹出一条表扬女朋友的情话 */
+const ROMANTIC_COMPLIMENTS = [
+    '你是我的小幸运，抓到多少头牛都不如你重要～',
+    '宝贝最聪明，找牛都这么厉害，爱你！',
+    '和你在一起的每一刻都像过关一样开心～',
+    '你玩游戏的样子也太可爱了吧！',
+    '我家宝贝就是厉害，继续冲！',
+    '你是我的唯一解，就像这道题只有你一个答案。',
+    '抓到再多的牛，也抓不住我对你的喜欢～',
+    '你认真找牛的样子，让我更喜欢你了。',
+    '宝贝真棒！奖励一个抱抱～',
+    '有你在，连找牛都变得甜了。',
+    '你是我心里唯一的小牛，别的牛都是过客～',
+    '再多的关也难不倒你，因为你最厉害！',
+    '每次你过关，我都想给你点一万个赞。',
+    '和你一起的时光，比通关还有成就感。',
+    '宝贝，你找牛的样子帅到我了！',
+];
+
+function showRomanticCompliment() {
+    const text = ROMANTIC_COMPLIMENTS[Math.floor(Math.random() * ROMANTIC_COMPLIMENTS.length)];
+    alert('💕 ' + text);
+}
+
 function checkWin() {
     if (gameOver) return;
 
@@ -752,6 +779,10 @@ function checkWin() {
     if (gameMode === 'infinite') {
         totalCowsCaught += gridSize;
         roundCount++;
+        while (totalCowsCaught >= lastCowsMilestone + 50) {
+            lastCowsMilestone += 50;
+            showRomanticCompliment();
+        }
         statusEl.textContent = `🎉 通过！本轮已过 ${roundCount} 关，累计 ${totalCowsCaught} 头牛，即将下一轮…`;
     } else {
         statusEl.textContent = `🎉 第 ${currentLevel} 关通过！即将进入下一关…`;
