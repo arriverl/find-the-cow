@@ -143,7 +143,10 @@ function initGame() {
 /** 每批尝试次数：较小以便尽快让出主线程，避免卡在「生成地图中」 */
 const GENERATE_BATCH_SIZE = 12;
 
-/** 尝试一批地图；若本批内得到唯一解且解等于种子则返回 { seeds, regions }，否则 null */
+/** 多解时反复修正，最多尝试 MAX_FIX 次 */
+const MAX_FIX_ATTEMPTS = 8;
+
+/** 尝试一批地图：先生成，若多解则用「划归格子」修正为唯一解，再校验是否等于种子（首轮） */
 function tryGenerateOne(maxAttempts) {
     const n = gridSize;
     const limit = maxAttempts ?? GENERATE_BATCH_SIZE;
@@ -151,9 +154,38 @@ function tryGenerateOne(maxAttempts) {
         const seeds = generateCowSeeds();
         if (!seeds || seeds.length !== n) continue;
         const regions = generateRegions(seeds);
-        if (countSolutions(regions) !== 1) continue;
-        if (!uniqueSolutionEqualsSeeds(regions, seeds)) continue;
-        return { seeds, regions };
+        let count = countSolutions(regions);
+
+        if (count === 1) {
+            if (uniqueSolutionEqualsSeeds(regions, seeds)) return { seeds, regions };
+            continue;
+        }
+        if (count === 0) continue;
+
+        // 多解：取前两个解，通过划归格子强行收敛为唯一解
+        let solA = null, solB = null;
+        const two = getFirstTwoSolutions(regions);
+        if (two.length >= 2) {
+            solA = two[0];
+            solB = two[1];
+        }
+        for (let fixAttempt = 0; fixAttempt < MAX_FIX_ATTEMPTS && count >= 2 && solA && solB; fixAttempt++) {
+            if (!fixMultiSolution(regions, solA, solB)) break;
+            count = countSolutions(regions);
+            if (count === 1) {
+                const uniqueSol = getUniqueSolution(regions);
+                if (uniqueSol && uniqueSol.length === n) {
+                    return { seeds: uniqueSol, regions };
+                }
+            }
+            if (count >= 2) {
+                const nextTwo = getFirstTwoSolutions(regions);
+                if (nextTwo.length >= 2) {
+                    solA = nextTwo[0];
+                    solB = nextTwo[1];
+                }
+            }
+        }
     }
     return null;
 }
@@ -269,6 +301,9 @@ function isNearAnySeed(r, c, seeds) {
     return seeds.some(s => Math.abs(s.r - r) <= 1 && Math.abs(s.c - c) <= 1);
 }
 
+/** 非对称生长：以一定概率推迟扩张，使边界参差不齐，减少对称矩形导致的多解 */
+const BFS_SKIP_PROB = 0.14;
+
 function generateRegions(seeds) {
     const n = gridSize;
     const grid = Array.from({ length: n }, () => Array(n).fill(-1));
@@ -288,10 +323,13 @@ function generateRegions(seeds) {
         const shuffled = [...dirs].sort(() => Math.random() - 0.5);
         for (const [dr, dc] of shuffled) {
             const nr = r + dr, nc = c + dc;
-            if (nr >= 0 && nr < n && nc >= 0 && nc < n && grid[nr][nc] === -1) {
-                grid[nr][nc] = id;
-                queue.push({ r: nr, c: nc, id });
+            if (nr < 0 || nr >= n || nc < 0 || nc >= n || grid[nr][nc] !== -1) continue;
+            if (Math.random() < BFS_SKIP_PROB) {
+                queue.push({ r, c, id });
+                continue;
             }
+            grid[nr][nc] = id;
+            queue.push({ r: nr, c: nc, id });
         }
     }
     return grid;
@@ -427,98 +465,74 @@ function buildRegionCells(regions) {
     return regionCells;
 }
 
-/** 统计合法解数量（每区选一格，每行每列各一，8 邻不相邻）；≥2 时提前返回 2 */
-function countSolutions(regions) {
+/** 位运算 + MRV：统计解数量，≥2 即停；可选返回前两个解 [solA, solB] */
+function solveWithBitmask(regions, collectTwo) {
     const n = regions.length;
     const regionCells = buildRegionCells(regions);
     for (let i = 0; i < n; i++) {
-        if (regionCells[i].length === 0) return 0;
+        if (regionCells[i].length === 0) return { count: 0, solutions: [] };
     }
 
-    const usedRow = new Set();
-    const usedCol = new Set();
-    const chosen = [];
+    // MRV：按区域格子数升序，优先填可选最少的区域
+    const order = Array.from({ length: n }, (_, i) => i);
+    order.sort((a, b) => regionCells[a].length - regionCells[b].length);
+    const orderedCells = order.map(i => regionCells[i]);
+
     let count = 0;
+    const solutions = [];
 
-    function adjacent(a, b) {
-        return Math.abs(a.r - b.r) <= 1 && Math.abs(a.c - b.c) <= 1;
-    }
-
-    function backtrack(regionIdx) {
+    function backtrack(slotIdx, rowMask, colMask, lastCows) {
         if (count >= 2) return;
-        if (regionIdx === n) {
+        if (slotIdx === n) {
             count++;
+            if (collectTwo && solutions.length < 2) {
+                solutions.push(lastCows.map(c => ({ r: c.r, c: c.c })));
+            }
             return;
         }
-        for (const cell of regionCells[regionIdx]) {
-            if (usedRow.has(cell.r) || usedCol.has(cell.c)) continue;
-            let ok = true;
-            for (let i = 0; i < chosen.length; i++) {
-                if (adjacent(cell, chosen[i])) {
-                    ok = false;
+
+        for (const cell of orderedCells[slotIdx]) {
+            const rBit = 1 << cell.r;
+            const cBit = 1 << cell.c;
+            if ((rowMask & rBit) || (colMask & cBit)) continue;
+
+            let nearConflict = false;
+            for (let i = 0; i < lastCows.length; i++) {
+                const cow = lastCows[i];
+                if (Math.abs(cow.r - cell.r) <= 1 && Math.abs(cow.c - cell.c) <= 1) {
+                    nearConflict = true;
                     break;
                 }
             }
-            if (!ok) continue;
-            usedRow.add(cell.r);
-            usedCol.add(cell.c);
-            chosen.push(cell);
-            backtrack(regionIdx + 1);
-            chosen.pop();
-            usedCol.delete(cell.c);
-            usedRow.delete(cell.r);
+            if (nearConflict) continue;
+
+            lastCows.push(cell);
+            backtrack(slotIdx + 1, rowMask | rBit, colMask | cBit, lastCows);
+            lastCows.pop();
         }
     }
 
-    backtrack(0);
-    return count;
+    backtrack(0, 0, 0, []);
+    return { count, solutions };
 }
 
-/** 当解唯一时，返回唯一解（n 个 {r,c}）；否则返回 null。用于校验是否等于种子。 */
+function countSolutions(regions) {
+    return solveWithBitmask(regions, false).count;
+}
+
+/** 返回前两个解（若存在），用于多解修正 */
+function getFirstTwoSolutions(regions) {
+    return solveWithBitmask(regions, true).solutions;
+}
+
+/** 当解唯一时返回唯一解（n 个 {r,c}），否则 null */
 function getUniqueSolution(regions) {
-    const n = regions.length;
-    const regionCells = buildRegionCells(regions);
-    for (let i = 0; i < n; i++) {
-        if (regionCells[i].length === 0) return null;
-    }
+    const { count, solutions } = solveWithBitmask(regions, true);
+    return count === 1 && solutions.length === 1 ? solutions[0] : null;
+}
 
-    const usedRow = new Set();
-    const usedCol = new Set();
-    const chosen = [];
-    let found = null;
-
-    function adjacent(a, b) {
-        return Math.abs(a.r - b.r) <= 1 && Math.abs(a.c - b.c) <= 1;
-    }
-
-    function backtrack(regionIdx) {
-        if (found !== null) return;
-        if (regionIdx === n) {
-            found = chosen.map(c => ({ r: c.r, c: c.c }));
-            return;
-        }
-        for (const cell of regionCells[regionIdx]) {
-            if (usedRow.has(cell.r) || usedCol.has(cell.c)) continue;
-            let ok = true;
-            for (let i = 0; i < chosen.length; i++) {
-                if (adjacent(cell, chosen[i])) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (!ok) continue;
-            usedRow.add(cell.r);
-            usedCol.add(cell.c);
-            chosen.push(cell);
-            backtrack(regionIdx + 1);
-            chosen.pop();
-            usedCol.delete(cell.c);
-            usedRow.delete(cell.r);
-        }
-    }
-
-    backtrack(0);
-    return found;
+function solutionSetKey(cell) {
+    return cell.r * 100 + cell.c;
 }
 
 /** 判断唯一解是否就是种子（同一组格子） */
@@ -527,9 +541,32 @@ function uniqueSolutionEqualsSeeds(regions, seeds) {
     if (!sol || sol.length !== seeds.length) return false;
     const set = new Set(seeds.map(s => s.r * 100 + s.c));
     for (const c of sol) {
-        if (!set.has(c.r * 100 + c.c)) return false;
+        if (!set.has(solutionSetKey(c))) return false;
     }
     return true;
+}
+
+/** 多解修正：取解 B 中多出的格子，划归到相邻区域，使解 B 不再合法 */
+function fixMultiSolution(regions, solA, solB) {
+    const setA = new Set(solA.map(solutionSetKey));
+    const n = regions.length;
+    const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+    for (const cell of solB) {
+        if (setA.has(solutionSetKey(cell))) continue;
+        const r = cell.r, c = cell.c;
+        const R = regions[r][c];
+
+        for (const [dr, dc] of dirs) {
+            const nr = r + dr, nc = c + dc;
+            if (nr < 0 || nr >= n || nc < 0 || nc >= n) continue;
+            const S = regions[nr][nc];
+            if (S === R) continue;
+            regions[r][c] = S;
+            return true;
+        }
+    }
+    return false;
 }
 
 /** 单击：空白↔×；连续双击：标为牛（标错扣命） */
