@@ -27,6 +27,25 @@ let longPressDrawing = false;
 let longPressTouchId = null;
 let longPressMouse = false;
 
+function updateResponsiveLayout() {
+    const root = document.documentElement;
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    document.body.classList.toggle('mobile-layout', isMobile);
+    document.body.classList.toggle('desktop-layout', !isMobile);
+
+    const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    const sidePadding = isMobile ? 24 : 56;
+    const boardPadding = 14;
+    const gap = 2;
+    const available = Math.max(180, viewportWidth - sidePadding - boardPadding * 2);
+    const raw = Math.floor((available - gap * (gridSize - 1)) / Math.max(1, gridSize));
+
+    const minSize = isMobile ? 24 : 28;
+    const maxSize = isMobile ? 56 : 60;
+    const cellSize = Math.max(minSize, Math.min(maxSize, raw));
+    root.style.setProperty('--cell-size', `${cellSize}px`);
+}
+
 function getCoins() {
     const v = parseInt(localStorage.getItem(COINS_STORAGE_KEY), 10);
     return isNaN(v) || v < 0 ? INITIAL_COINS : v;
@@ -199,6 +218,7 @@ function renderBoard(seeds, regions) {
     const statusEl = document.getElementById('status');
     statusEl.classList.remove('win', 'lose');
 
+    updateResponsiveLayout();
     boardEl.style.gridTemplateColumns = `repeat(${gridSize}, 1fr)`;
     boardEl.innerHTML = '';
     for (let r = 0; r < gridSize; r++) {
@@ -800,6 +820,7 @@ function checkWin() {
 
 // 页面加载：显示首页，绑定模式按钮
 function init() {
+    updateResponsiveLayout();
     if (localStorage.getItem(COINS_STORAGE_KEY) === null) {
         localStorage.setItem(COINS_STORAGE_KEY, String(INITIAL_COINS));
     }
@@ -817,3 +838,6 @@ if (document.readyState === 'loading') {
 } else {
     init();
 }
+
+window.addEventListener('resize', updateResponsiveLayout);
+window.addEventListener('orientationchange', updateResponsiveLayout);
